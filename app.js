@@ -19,9 +19,21 @@ let currentMonth = 0; // January (0 based)
 let prayerData = {};
 let selectedDate = null;
 
+// === LocalStorage Functions ===
+function saveToLocalStorage() {
+    localStorage.setItem('prayerData', JSON.stringify(prayerData));
+}
+function loadFromLocalStorage() {
+    const stored = localStorage.getItem('prayerData');
+    if (stored) {
+        prayerData = JSON.parse(stored);
+    }
+}
+
+// === Calendar and App Logic ===
 document.addEventListener('DOMContentLoaded', () => {
+    loadFromLocalStorage();
     updateCurrentDate();
-    loadSampleData();
     renderCalendar();
     updateStatistics();
 });
@@ -32,36 +44,12 @@ function updateCurrentDate() {
     document.getElementById('currentDate').textContent = now.toLocaleDateString('en-US', options);
 }
 
-// Sample data for demonstration (only for 2025)
-function loadSampleData() {
-    // No persistent storage in this snippet; user can import/export to maintain.
-    prayerData = {
-        "2025-01-01": {
-            "fazr": "ontime",
-            "zohar": "ontime",
-            "asar": "missed",
-            "magrib": "ontime",
-            "esha": "qaza"
-        },
-        "2025-01-02": {
-            "fazr": "ontime",
-            "zohar": "missed",
-            "asar": "ontime",
-            "magrib": "ontime",
-            "esha": "ontime"
-        }
-    };
-}
-
-// Determine if leap year
 function isLeapYear(year) {
     return (year % 4 === 0 && year % 100 !== 0) || (year % 400 === 0);
 }
 
 function daysInMonth(year, month) {
-    if (month === 1) { // February
-        return isLeapYear(year) ? 29 : 28;
-    }
+    if (month === 1) return isLeapYear(year) ? 29 : 28;
     const month31 = [0, 2, 4, 6, 7, 9, 11];
     return month31.includes(month) ? 31 : 30;
 }
@@ -149,7 +137,10 @@ function openModal(dateString) {
             btn.textContent = meta.label;
             btn.classList.add("status-btn", `status-${status}`);
 
-            if ((prayerData[selectedDate] && prayerData[selectedDate][key] === status) || (!prayerData[selectedDate] && status === "unmarked")) {
+            if (
+                (prayerData[selectedDate] && prayerData[selectedDate][key] === status) ||
+                (!prayerData[selectedDate] && status === "unmarked")
+            ) {
                 btn.classList.add("active");
             }
             btn.onclick = () => {
@@ -159,6 +150,7 @@ function openModal(dateString) {
 
                 if (!prayerData[selectedDate]) prayerData[selectedDate] = {};
                 prayerData[selectedDate][key] = status;
+                saveToLocalStorage();
                 updateStatistics();
             };
             div.appendChild(btn);
@@ -189,6 +181,7 @@ function markAll(status) {
     for (const prayer of appData.prayerNames) {
         prayerData[selectedDate][prayer.toLowerCase()] = status;
     }
+    saveToLocalStorage();
     openModal(selectedDate);
 }
 
@@ -231,7 +224,6 @@ function nextYear() {
 function updateStatistics() {
     let ontime = 0, missed = 0, qaza = 0;
 
-    // Calculate totals only for currentYear
     for (const date in prayerData) {
         if (!date.startsWith(currentYear)) continue;
         for (const prayer of appData.prayerNames) {
@@ -242,7 +234,6 @@ function updateStatistics() {
             else if (status === "qaza") qaza++;
         }
     }
-
     const dim = isLeapYear(currentYear) ? 366 : 365;
     const totalPrayers = dim * appData.prayerNames.length;
 
@@ -274,6 +265,7 @@ function importData(input) {
     reader.onload = function (event) {
         try {
             prayerData = JSON.parse(event.target.result);
+            saveToLocalStorage();
             alert("Backup imported successfully!");
             renderCalendar();
             updateStatistics();
@@ -288,6 +280,7 @@ function importData(input) {
 function clearAllData() {
     if (confirm("Are you sure you want to clear all data? This action cannot be undone.")) {
         prayerData = {};
+        saveToLocalStorage();
         renderCalendar();
         updateStatistics();
     }
