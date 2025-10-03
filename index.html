@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Qaza Namaz Tracker 2025-2084</title>
+    <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+    <header class="header">
+        <div class="container">
+            <div class="header-content">
+                <div class="header-main">
+                    <h1 class="app-title">🕌 Qaza Namaz Tracker 2025-2084</h1>
+                    <div class="current-date" id="currentDate"></div>
+                </div>
+                <div class="header-actions">
+                    <button class="btn btn--secondary btn--sm" onclick="exportData()">📱 Export Backup</button>
+                    <label class="btn btn--secondary btn--sm" for="importFile">📂 Import Backup</label>
+                    <input type="file" id="importFile" accept=".json" style="display:none" onchange="importData(this)" />
+                    <button class="btn btn--outline btn--sm" onclick="clearAllData()">🗑️ Clear Data</button>
+                </div>
+            </div>
+
+            <div class="stats-summary">
+                <div class="stat-item">
+                    <span class="stat-label">Total Prayers This Year:</span>
+                    <span class="stat-value" id="totalPrayers">1825</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">On Time:</span>
+                    <span class="stat-value stat-ontime" id="ontimeCount">0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Qaza Pending:</span>
+                    <span class="stat-value stat-missed" id="missedCount">0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Qaza Completed:</span>
+                    <span class="stat-value stat-qaza" id="qazaCount">0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Completion %:</span>
+                    <span class="stat-value" id="completionPercent">0 %</span>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <main>
+        <div class="calendar-container">
+            <div class="calendar-header">
+                <button class="btn" onclick="prevYear()">&lt;&lt;</button>
+                <button class="btn" onclick="prevMonth()">&lt;</button>
+                
+                <h2 id="monthAndYear"></h2>
+                
+                <button class="btn" onclick="nextMonth()">&gt;</button>
+                <button class="btn" onclick="nextYear()">&gt;&gt;</button>
+            </div>
+            <table class="calendar" id="calendar"></table>
+        </div>
+    </main>
+
+    <div id="dailyModal" class="modal" style="display:none;">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal()">&times;</span>
+            <h3 id="modalDate"></h3>
+            <div id="prayerList"></div>
+            <div class="modal-actions">
+                <button class="btn btn--primary btn--sm" onclick="markAll('ontime')">Mark All On Time</button>
+                <button class="btn btn--danger btn--sm" onclick="markAll('missed')">Mark All Missed</button>
+            </div>
+            <button class="btn btn--outline btn--sm" onclick="saveModal()">Save</button>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
