@@ -14,14 +14,29 @@ const appData = {
     ]
 };
 
-let currentYear = appData.startYear;
-let currentMonth = 0; // January (0 based)
+// Default calendar to current date (clamped to startYear..endYear)
+const _initToday = new Date();
+let currentYear = Math.min(Math.max(_initToday.getFullYear(), appData.startYear), appData.endYear);
+let currentMonth = _initToday.getMonth(); // Current month (0-based)
 let prayerData = {};
 let selectedDate = null;
+
+// === Cloud Sync State & Constants ===
+const STORAGE_PWD_KEY = "qaza_namaz_sync_pwd_v5";
+const CLOUD_SYNC_RELAY = "https://ntfy.sh";
+let syncPassword = localStorage.getItem(STORAGE_PWD_KEY) || "";
+let autoPushTimer = null;
+let pullingFromCloud = false;
 
 // === LocalStorage Functions ===
 function saveToLocalStorage() {
     localStorage.setItem('prayerData', JSON.stringify(prayerData));
+    if (!pullingFromCloud && syncPassword && syncPassword.trim().length >= 4) {
+        clearTimeout(autoPushTimer);
+        autoPushTimer = setTimeout(() => {
+            syncWithPasswordCloud("push", false);
+        }, 1200);
+    }
 }
 function loadFromLocalStorage() {
     const stored = localStorage.getItem('prayerData');
@@ -33,6 +48,7 @@ function loadFromLocalStorage() {
 // === Calendar and App Logic ===
 document.addEventListener('DOMContentLoaded', () => {
     loadFromLocalStorage();
+    refreshSyncButton();
     updateCurrentDate();
     renderCalendar();
     updateStatistics();
@@ -278,10 +294,223 @@ function importData(input) {
 }
 
 function clearAllData() {
-    if (confirm("Are you sure you want to clear all data? This action cannot be undone.")) {
+    if (confirm("Are you sure you sure you want to clear all data? This action cannot be undone.")) {
         prayerData = {};
         saveToLocalStorage();
         renderCalendar();
         updateStatistics();
+    }
+}
+
+// =========================================================================
+// COMPACT CLOUD SYNC v5 (packTransactions / unpackTransactions + >4KB
+// Attachment Reader + Case-Insensitive & Legacy Password Channel Fallback
+// + Prefix-Aware SHA-256 Duplicate Detection)
+// =========================================================================
+const STATUS_TO_CODE = { unmarked: "u", ontime: "o", missed: "m", qaza: "q" };
+const CODE_TO_STATUS = { u: "unmarked", o: "ontime", m: "missed", q: "qaza" };
+
+function refreshSyncButton() {
+    const lbl = document.getElementById("syncOpenBtnLabel");
+    if (lbl) lbl.textContent = syncPassword ? "Password Synced" : "Set Sync Password";
+}
+
+function openSyncModal() {
+    const input = document.getElementById("syncPasswordInput");
+    if (input) input.value = syncPassword;
+    const modal = document.getElementById("syncModal");
+    if (modal) modal.style.display = "flex";
+}
+
+function closeSyncModal() {
+    const modal = document.getElementById("syncModal");
+    if (modal) modal.style.display = "none";
+}
+
+function onSyncPasswordInput(val) {
+    syncPassword = val;
+    localStorage.setItem(STORAGE_PWD_KEY, syncPassword);
+    refreshSyncButton();
+}
+
+function setSyncStatus(status, msg) {
+    const el = document.getElementById("syncStatusMsg");
+    if (!el) return;
+    if (status === "idle" || !msg) {
+        el.style.display = "none";
+        el.textContent = "";
+        return;
+    }
+    el.style.display = "block";
+    el.style.color = status === "error" ? "#dc3545" : status === "success" ? "#28a745" : "#007bff";
+    el.textContent = msg;
+}
+
+// Case-Insensitive + Legacy Password Channel Fallback
+async function getPasswordHash(password, normalizeCase = false) {
+    const cleanPwd = normalizeCase ? password.trim().toLowerCase() : password.trim();
+    const msgUint8 = new TextEncoder().encode("qaza-namaz-salt-v5-" + cleanPwd);
+    const hashBuffer = await crypto.subtle.digest("SHA-256", msgUint8);
+    return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, "0")).join("").slice(0, 32);
+}
+
+// Prefix-Aware SHA-256 Duplicate Detection: matches both full 64-char hashes and compact 16-char synced hashes
+function checkDuplicate(candidate, hash = null, existingList = []) {
+    for (const tx of existingList) {
+        if (hash && tx.fileHash && (tx.fileHash === hash || hash.startsWith(tx.fileHash) || tx.fileHash.startsWith(hash))) {
+            return { isDup: true, reason: "Already in Portfolio (Exact Hash Match)" };
+        }
+        if (candidate && candidate.date && tx.date === candidate.date) {
+            return { isDup: true, reason: `Duplicate Date Entry (${candidate.date})` };
+        }
+    }
+    return { isDup: false, reason: null };
+}
+
+// Compact Cloud Sync Serializer: Compresses prayer records into tiny [date, "oomqu", 16-char-hash] tuples
+// so 60+ records stay well under ntfy.sh's 4 KB inline message limit
+function packTransactions(dataObj) {
+    if (!dataObj || typeof dataObj !== "object") return [];
+    const packed = [];
+    for (const [dateStr, prayers] of Object.entries(dataObj)) {
+        if (!prayers || typeof prayers !== "object") continue;
+        const codes = appData.prayerNames.map(p => {
+            const st = prayers[p.toLowerCase()] || "unmarked";
+            return STATUS_TO_CODE[st] || "u";
+        }).join("");
+        if (codes === "uuuuu") continue; // Skip completely unmarked days to save space
+        const row = [dateStr, codes];
+        if (prayers.fileHash) row.push(String(prayers.fileHash).slice(0, 16));
+        packed.push(row);
+    }
+    return packed;
+}
+
+function unpackTransactions(packed) {
+    if (!packed) return {};
+    // If already an object map of dates -> prayer statuses
+    if (!Array.isArray(packed) && typeof packed === "object") {
+        return packed;
+    }
+    const restored = {};
+    for (const row of packed) {
+        if (!Array.isArray(row) || row.length < 2) continue;
+        const [dateStr, codes, shortHash] = row;
+        const dayObj = {};
+        appData.prayerNames.forEach((p, idx) => {
+            const ch = (codes || "")[idx] || "u";
+            dayObj[p.toLowerCase()] = CODE_TO_STATUS[ch] || "unmarked";
+        });
+        if (shortHash) dayObj.fileHash = shortHash;
+        restored[dateStr] = dayObj;
+    }
+    return restored;
+}
+
+// Cloud Push & Pull with Automatic >4 KB Attachment Reader & Dual Channel Fallback
+async function syncWithPasswordCloud(mode = "push", showAlert = true) {
+    if (!syncPassword || syncPassword.trim().length < 4) {
+        if (showAlert) {
+            setSyncStatus("error", "Please enter a password of at least 4 characters.");
+        }
+        return;
+    }
+
+    setSyncStatus("syncing", mode === "push" ? "Uploading prayer records to cloud..." : "Downloading prayer records from cloud...");
+
+    try {
+        const normKey = await getPasswordHash(syncPassword, true);
+        const exactKey = await getPasswordHash(syncPassword, false);
+        const primaryTopic = `qaza_sync_bin_${normKey}`;
+        const legacyTopic = `qaza_sync_bin_${exactKey}`;
+
+        if (mode === "push") {
+            const packedRows = packTransactions(prayerData);
+            const compactPacket = JSON.stringify({
+                u: new Date().toISOString(),
+                p: packedRows
+            });
+
+            const res = await fetch(`${CLOUD_SYNC_RELAY}/${primaryTopic}`, {
+                method: "POST",
+                headers: { "Title": "Qaza Namaz Tracker Sync" },
+                body: compactPacket
+            });
+
+            if (primaryTopic !== legacyTopic) {
+                fetch(`${CLOUD_SYNC_RELAY}/${legacyTopic}`, { method: "POST", body: compactPacket }).catch(() => {});
+            }
+
+            if (!res.ok) throw new Error(`Cloud Push Failed (HTTP ${res.status})`);
+
+            setSyncStatus("success", `✓ Pushed ${packedRows.length} tracked days to Cloud! Now click "Pull from Cloud" on your other device.`);
+        } else {
+            // Automatic >4 KB Attachment Reader + Inline Message Reader
+            const fetchFromTopic = async (topic) => {
+                const res = await fetch(`${CLOUD_SYNC_RELAY}/${topic}/json?poll=1&since=all`, {
+                    method: "GET",
+                    cache: "no-store"
+                });
+                if (!res.ok) return null;
+                const rawLines = (await res.text()).trim();
+                if (!rawLines) return null;
+
+                const lines = rawLines.split("\n").filter(Boolean);
+                for (let i = lines.length - 1; i >= 0; i--) {
+                    try {
+                        const event = JSON.parse(lines[i]);
+                        if (event.event !== "message") continue;
+
+                        let parsedMsg = null;
+                        // Case A: Standard inline message (<4 KB)
+                        if (event.message && event.message.trim().startsWith("{")) {
+                            parsedMsg = JSON.parse(event.message);
+                        }
+                        // Case B: Payload >4 KB converted by ntfy.sh into an attachment
+                        else if (event.attachment && event.attachment.url) {
+                            const attRes = await fetch(event.attachment.url, { cache: "no-store" });
+                            if (attRes.ok) parsedMsg = await attRes.json();
+                        }
+
+                        if (parsedMsg) {
+                            if (Array.isArray(parsedMsg.p)) return unpackTransactions(parsedMsg.p);
+                            if (parsedMsg.prayerData && typeof parsedMsg.prayerData === "object") return parsedMsg.prayerData;
+                            if (parsedMsg.blobUrl) {
+                                const blobRes = await fetch(parsedMsg.blobUrl, { headers: { "Accept": "application/json" } });
+                                if (blobRes.ok) {
+                                    const blobJson = await blobRes.json();
+                                    if (blobJson && blobJson.prayerData) return blobJson.prayerData;
+                                }
+                            }
+                        }
+                    } catch (_) {}
+                }
+                return null;
+            };
+
+            let pulledData = await fetchFromTopic(primaryTopic);
+            if (!pulledData && primaryTopic !== legacyTopic) {
+                pulledData = await fetchFromTopic(legacyTopic);
+            }
+
+            if (!pulledData || typeof pulledData !== "object") {
+                throw new Error("No cloud data found for this password yet. Click 'Save & Push Sync' on your primary device first!");
+            }
+
+            prayerData = pulledData;
+            pullingFromCloud = true;
+            try {
+                saveToLocalStorage();
+            } finally {
+                pullingFromCloud = false;
+            }
+            renderCalendar();
+            updateStatistics();
+
+            const countDays = Object.keys(prayerData).length;
+            setSyncStatus("success", `✓ Pulled ${countDays} tracked days from Cloud!`);
+        }
+    } catch (err) {
+        setSyncStatus("error", err.message);
     }
 }

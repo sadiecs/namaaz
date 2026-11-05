@@ -15,8 +15,9 @@
                     <div class="current-date" id="currentDate"></div>
                 </div>
                 <div class="header-actions">
-                    <button class="btn btn--secondary btn--sm" onclick="exportData()">📱 Export Backup</button>
-                    <label class="btn btn--secondary btn--sm" for="importFile">📂 Import Backup</label>
+                    <button class="btn btn--secondary btn--sm" id="syncOpenBtn" onclick="openSyncModal()">🔐 <span id="syncOpenBtnLabel">Set Sync Password</span></button>
+                    <button class="btn btn--secondary btn--sm" onclick="exportData()">📤 Export Backup</button>
+                    <label class="btn btn--secondary btn--sm" for="importFile">📥 Import Backup</label>
                     <input type="file" id="importFile" accept=".json" style="display:none" onchange="importData(this)" />
                     <button class="btn btn--outline btn--sm" onclick="clearAllData()">🗑️ Clear Data</button>
                 </div>
@@ -72,6 +73,32 @@
                 <button class="btn btn--danger btn--sm" onclick="markAll('missed')">Mark All Missed</button>
             </div>
             <button class="btn btn--outline btn--sm" onclick="saveModal()">Save</button>
+        </div>
+    </div>
+
+    <div id="syncModal" class="modal" style="display:none;">
+        <div class="modal-content">
+            <span class="close" onclick="closeSyncModal()">&times;</span>
+            <h3 style="margin-top:0;">Live Password Cloud Sync</h3>
+            <p style="font-size:0.85rem; color:#555; line-height:1.4;">
+                1. Enter your secret password on your <b>PC / Main Phone</b> and click <b>"✓ Save &amp; Push Sync"</b>.<br/>
+                2. Open your <b>Other Device</b>, enter the <b>exact same password</b>, and click <b>"⬇ Pull from Cloud"</b>!
+            </p>
+            <div style="margin: 0.75rem 0;">
+                <label style="font-size:0.85rem; font-weight:600; display:block; margin-bottom:4px;">Secret Sync Password</label>
+                <input
+                    type="text"
+                    id="syncPasswordInput"
+                    placeholder="e.g. SadiqueNamaz2026"
+                    oninput="onSyncPasswordInput(this.value)"
+                    style="width:100%; box-sizing:border-box; padding:8px; border:1px solid #ccc; border-radius:4px; font-family:monospace;"
+                />
+            </div>
+            <p id="syncStatusMsg" style="font-size:0.85rem; font-weight:600; display:none; margin:8px 0;"></p>
+            <div class="modal-actions" style="justify-content:flex-end; gap:8px;">
+                <button class="btn btn--secondary btn--sm" onclick="syncWithPasswordCloud('pull', true)">⬇ Pull from Cloud</button>
+                <button class="btn btn--primary btn--sm" onclick="syncWithPasswordCloud('push', true)">✓ Save &amp; Push Sync</button>
+            </div>
         </div>
     </div>
 
